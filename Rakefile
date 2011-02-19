@@ -13,12 +13,12 @@ require 'jeweler'
 Jeweler::Tasks.new do |gem|
   # gem is a Gem::Specification... see http://docs.rubygems.org/read/chapter/20 for more options
   gem.name = "buffet"
-  gem.homepage = "http://github.com/arches/buffet"
+  gem.homepage = "http://github.com/contour/buffet"
   gem.license = "MIT"
-  gem.summary = %Q{TODO: one-line summary of your gem}
-  gem.description = %Q{TODO: longer description of your gem}
-  gem.email = "archslide@gmail.com"
-  gem.authors = ["Chris Doyle"]
+  gem.summary = "Standardized access to social media APIs"
+  gem.description = "Providing a standard way to work with photos and videos from various sources"
+  gem.email = "web@contour.com"
+  gem.authors = ["Chris Doyle", "Kerri Miller", "John Postlethwait"]
   # Include your dependencies below. Runtime dependencies are required when using your gem,
   # and development dependencies are only needed for development (ie running rake tasks, tests, etc)
   #  gem.add_runtime_dependency 'jabber4r', '> 0.1'
