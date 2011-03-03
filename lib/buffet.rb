@@ -110,8 +110,6 @@ module Buffet
 
   end
 
-  ###########################################################
-  #
   # The ProxyInterface class defines the interface for the proxy implementations, raising errors if a method is undefined. eg:
   #
   #   def find_album(user, options = {})
@@ -148,8 +146,6 @@ module Buffet
     end
   end
 
-  ###########################################################
-  #
   # The individual service proxies implement the methods in the Proxy interface. This is where we make the actual API
   # call. These methods are responsible for parsing the JSON/XML response and returning pure types.
   #
