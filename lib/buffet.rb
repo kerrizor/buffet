@@ -25,7 +25,21 @@
 # to make this information available, but not TOO easy to get to, because after all, the whole point of this gem is to
 # standardize. But hopefully the +extras+ hash will make life easier for developers who want a little more control,
 # and also help us determine what features we should add to the official feature set.
-#
+
+require 'rubygems'
+require 'typhoeus'
+require 'json'
+
+class MyUser;
+  def get_facebook_token;
+    "132761686793915|2.2KIrEm5FzpCqcmduTbCx6Q__.3600.1299200400-214500256|4y2fs9zhoosfdmoFMMw4pWThuGM"
+  end
+end
+
+FACEBOOK_SECRET = ""
+FACEBOOK_APP_ID = ""
+USER_TOKEN = ""
+
 module Buffet
 
   # The user object shouldn't be one of ours. All we care about are the tokens for each service
@@ -63,8 +77,8 @@ module Buffet
 
   class Album
 
-    attr_accessor :title, :id, :service, :user
-    
+    attr_accessor :title, :remote_id, :service, :user
+
     # PRIVATE PROPERTIES
     # album.user - save this for making future requests?
 
@@ -86,16 +100,33 @@ module Buffet
     # "summer 2010" just as easily as looking on a single service.
     #
     def self.find(user = nil, options = {})
-
       # We can only make the requests in parallel if they're made OUTSIDE the proxies.
       # The FB proxy doesn't know that the Flickr proxy is making a request. The only guy who knows is the pure type calling
       # the proxy method. So, the pure type instantiates the Hydra and passes it to the proxy.  Biggest open
       # question here is how the responses are then distributed back to the proxies.
 
+      hydra = Typhoeus::Hydra.new
+      requests = []
+      options.delete(:services) { |s| [] }.each do |service| # Hash.delete returns the result of the block if it doesn't find the key
+        requests << Buffet::Util::constantize("#{service.to_s.capitalize}Proxy").find_albums(user, hydra, options)
+      end
+      hydra.run
+
+      results = []
+      requests.each do |request|
+        results.concat(request.handled_response)
+      end
+      results
     end
 
     # makes an HTTP call to load the album's images
     def images
+
+      hydra = Typhoeus::Hydra.new
+      request = Buffet::Util::constantize("#{service.to_s.capitalize}Proxy").find_album_images(hydra, self)
+      hydra.run
+
+      request.handled_response
     end
   end
 
@@ -104,6 +135,8 @@ module Buffet
 
     # PRIVATE PROPERTIES
     # image.user?
+
+    attr_accessor :url
 
     def self.find(user, options = {})
     end
@@ -129,33 +162,109 @@ module Buffet
   # Proxy methods should be able to take an option Hydra object in which to queue its request. If no hydra is provided,
   # the proxy method should create its own HTTP connection. All request multithreading should happen at the pure-type level.
   #
+  # 2011-03-03 cd: or, proxy methods REQUIRE a hydra, so all request management is at the pure-type level. It may be that
+  # only one request is added to the hydra. This would prevent us from having to special-case all the proxy methods.
+  #
   class ProxyInterface
 
-    ["find_album",
-     "find_image",
-     "find_album_by_id",
-     "find_album_images"].each do |method|
+    # TODO: make sure tests hit all these methods for every proxy.
 
-      # class_eval these into methods that look like:
-      # def find_album
-      #   raise 'needs to implement "find_album"'
-      # end
-      #
-      # TODO: make sure tests hit all these methods for every proxy.
+#    ["find_albums",
+#     "find_image",
+#     "find_album_by_id",
+#     "find_album_images"].each do |method|
+#
+#      # class_eval these into methods that look like:
+#      # def find_album
+#      #   raise 'needs to implement "find_album"'
+#      # end
+
+    def self.find_albums(user, hydra, options = {})
+      raise 'needs to implement "find_albums"'
+    end
+
+    def self.find_album_images(hydra, album, options = {})
 
     end
+
   end
 
   # The individual service proxies implement the methods in the Proxy interface. This is where we make the actual API
   # call. These methods are responsible for parsing the JSON/XML response and returning pure types.
   #
-  # We may want to specify what types of media this service returns, so we don't have to hit photo services when we're
+  # We may want to specify what types of media this se`rvice returns, so we don't have to hit photo services when we're
   # interested in videos. Though, maybe we can do that by having a photo service return an empty result set for a
   # find_videos method.
   #
   # The proxy is responsible for anything else service-specific. Eg, flickr requests are signed with a hash of the parameters
   # you're passing. That would happen in the proxy.
   #
-  class FlickrProxy < Proxy
+  class FlickrProxy < ProxyInterface
+  end
+
+  require 'cgi'
+  require 'json'
+  class FacebookProxy < ProxyInterface
+
+    def self.find_album_images(hydra, album, options = {})
+
+      request_url = "https://graph.facebook.com/#{album.remote_id}/photos?access_token=#{CGI::escape USER_TOKEN}"
+
+      request = Typhoeus::Request.new(request_url)
+
+      hydra.queue(request)
+      request.on_complete = lambda do |response|
+        parsed = JSON.parse(response.body)
+
+        images = []
+        parsed["data"].each do |raw_image|
+          image = Image.new
+          image.url = raw_image['source']
+          images << image
+        end
+        images
+      end
+
+      request
+    end
+
+    def self.find_albums(user, hydra, options = {})
+      request_url = "https://graph.facebook.com/me/albums?client_id=#{FACEBOOK_APP_ID}&client_secret=#{FACEBOOK_SECRET}&access_token=#{CGI::escape USER_TOKEN}"
+      request = Typhoeus::Request.new(request_url)
+      hydra.queue(request)
+
+      request.on_complete = lambda do |response|
+        parsed = JSON.parse(response.body)
+
+        albums = []
+        parsed["data"].each do |raw_album|
+          album = Album.new
+          album.title = raw_album['name']
+          album.remote_id = raw_album['id']
+          album.user = user
+          album.service = "facebook"
+          albums << album
+        end
+        albums
+      end
+
+      request
+    end
+
+  end
+
+  module Util
+    def self.constantize(camel_cased_word)
+      names = camel_cased_word.split('::')
+      names.shift if names.empty? || names.first.empty?
+
+      constant = Object
+      names.each do |name|
+        constant = constant.const_defined?(name) ? constant.const_get(name) : constant.const_missing(name)
+      end
+      constant
+    end
   end
 end
+
+user = MyUser.new
