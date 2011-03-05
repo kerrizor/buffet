@@ -30,15 +30,29 @@ require 'rubygems'
 require 'typhoeus'
 require 'json'
 
+FACEBOOK_APP_ID = ""
+FACEBOOK_SECRET = ""
+FACEBOOK_USER_TOKEN = ""
+
+FLICKR_TOKEN = ""
+FLICKR_SECRET = ""
+FLICKR_USER_TOKEN = ""
+FLICKR_USER_ID = ""
+
 class MyUser;
-  def get_facebook_token;
-    "132761686793915|2.2KIrEm5FzpCqcmduTbCx6Q__.3600.1299200400-214500256|4y2fs9zhoosfdmoFMMw4pWThuGM"
+  def get_facebook_token
+    FACEBOOK_USER_TOKEN
+  end
+
+  def get_flickr_token
+    FLICKR_USER_TOKEN
+  end
+
+  def get_flickr_id
+    FLICKR_USER_ID
   end
 end
 
-FACEBOOK_SECRET = ""
-FACEBOOK_APP_ID = ""
-USER_TOKEN = ""
 
 module Buffet
 
@@ -108,7 +122,7 @@ module Buffet
       hydra = Typhoeus::Hydra.new
       requests = []
       options.delete(:services) { |s| [] }.each do |service| # Hash.delete returns the result of the block if it doesn't find the key
-        requests << Buffet::Util::constantize("#{service.to_s.capitalize}Proxy").find_albums(user, hydra, options)
+        requests << Buffet::Util::constantize("#{service.to_s.capitalize}Proxy").find_albums(hydra, user, options)
       end
       hydra.run
 
@@ -132,15 +146,8 @@ module Buffet
 
   # how do we deal with different sizes?
   class Image
-
-    # PRIVATE PROPERTIES
-    # image.user?
-
     attr_accessor :url
-
-    def self.find(user, options = {})
-    end
-
+    attr_accessor :remote_id
   end
 
   # The ProxyInterface class defines the interface for the proxy implementations, raising errors if a method is undefined. eg:
@@ -179,12 +186,12 @@ module Buffet
 #      #   raise 'needs to implement "find_album"'
 #      # end
 
-    def self.find_albums(user, hydra, options = {})
+    def self.find_albums(hydra, user, options = {})
       raise 'needs to implement "find_albums"'
     end
 
     def self.find_album_images(hydra, album, options = {})
-
+      raise 'needs to implement "find_album_images"'
     end
 
   end
@@ -199,16 +206,130 @@ module Buffet
   # The proxy is responsible for anything else service-specific. Eg, flickr requests are signed with a hash of the parameters
   # you're passing. That would happen in the proxy.
   #
+  require 'crack'
   class FlickrProxy < ProxyInterface
+
+    API_BASE_URL = "http://api.flickr.com/services/"
+    
+    def self.find_albums(hydra, user, options = {})
+      request_url = self.signed_url({"method" => "flickr.photosets.getList", "user_id" => user.get_flickr_id})
+      request = Typhoeus::Request.new(request_url)
+      hydra.queue(request)
+
+      request.on_complete = lambda do |response|
+        parsed = Crack::XML.parse(response.body)
+
+        albums = [] # to collect pure types
+
+        photosets = parsed["rsp"]["photosets"]["photoset"]  # flickr's "albums"
+        [].concat(photosets).each do |set|
+          album = Album.new
+          album.title = set["title"]
+          album.user = user
+          album.remote_id = set["id"]
+          albums << album
+        end
+
+        # photostream
+        album = Album.new
+        album.title = "Photostream"
+        album.user = user
+        album.service = "flickr"  # hack
+        albums << album
+
+        return albums
+      end
+
+      request
+    end
+
+    def self.find_album_images(hydra, album, options = {})
+
+      # though a photostream acts like an album, it's accessed differently
+      if (album.title == "Photostream")
+        request_url = self.signed_url({"method" => "flickr.people.getPhotos", "user_id" => album.user.get_flickr_id, "auth_token" => album.user.get_flickr_token})
+      else
+        request_url = self.signed_url({"method" => "flickr.photosets.getPhotos", "photoset_id" => album.remote_id})
+      end
+
+      request = Typhoeus::Request.new(request_url)
+      hydra.queue(request)
+
+      request.on_complete = lambda do |response|
+        parsed = Crack::XML.parse(response.body)
+
+        if album.title == "Photostream"
+          photos = parsed["rsp"]["photos"]["photo"]
+        else
+          photos = parsed["rsp"]["photoset"]["photo"]
+        end
+
+        pure_images = []
+
+        [].concat(photos).each do |photo|
+          pic = Image.new
+          pic.url = "http://farm#{photo['farm']}.static.flickr.com/#{photo['server']}/#{photo['id']}_#{photo['secret']}.jpg"
+          pic.remote_id = [photo['farm'], photo['server'], photo['id'], photo['secret']].join(":")
+          pure_images << pic
+        end
+
+        return pure_images
+      end
+
+      request
+    end
+
+    private
+
+    def self.signed_url(arg_hash, endpoint = "rest")
+      arg_hash.merge!({"api_key" => FLICKR_TOKEN})
+      arg_list = []
+      arg_hash.each do |key, value|
+        arg_list << "#{key}=#{value}"
+      end
+      "#{API_BASE_URL}#{endpoint}/?&api_sig=#{self.sign(arg_hash)}&#{arg_list.join('&')}"
+    end
+
+    def self.sign(arg_hash)
+      arg_list = []
+      arg_hash.keys.sort.each do |key|
+        arg_list << key
+        arg_list << arg_hash[key]
+      end
+      Digest::MD5.hexdigest("#{FLICKR_SECRET}#{arg_list.join()}")
+    end
   end
 
   require 'cgi'
   require 'json'
   class FacebookProxy < ProxyInterface
 
+    def self.find_albums(hydra, user, options = {})
+      request_url = "https://graph.facebook.com/me/albums?client_id=#{FACEBOOK_APP_ID}&client_secret=#{FACEBOOK_SECRET}&access_token=#{CGI::escape user.get_facebook_token}"
+      request = Typhoeus::Request.new(request_url)
+      hydra.queue(request)
+
+      request.on_complete = lambda do |response|
+        parsed = JSON.parse(response.body)
+
+        albums = []
+        parsed["data"].each do |raw_album|
+          album = Album.new
+          album.title = raw_album['name']
+          album.remote_id = raw_album['id']
+          album.user = user
+          album.service = "facebook"  # hack
+          albums << album
+        end
+        albums
+      end
+
+      request
+    end
+
     def self.find_album_images(hydra, album, options = {})
 
-      request_url = "https://graph.facebook.com/#{album.remote_id}/photos?access_token=#{CGI::escape USER_TOKEN}"
+      request_url = "https://graph.facebook.com/#{album.remote_id}/photos?access_token=#{CGI::escape album.user.get_facebook_token}"
 
       request = Typhoeus::Request.new(request_url)
 
@@ -227,30 +348,6 @@ module Buffet
 
       request
     end
-
-    def self.find_albums(user, hydra, options = {})
-      request_url = "https://graph.facebook.com/me/albums?client_id=#{FACEBOOK_APP_ID}&client_secret=#{FACEBOOK_SECRET}&access_token=#{CGI::escape USER_TOKEN}"
-      request = Typhoeus::Request.new(request_url)
-      hydra.queue(request)
-
-      request.on_complete = lambda do |response|
-        parsed = JSON.parse(response.body)
-
-        albums = []
-        parsed["data"].each do |raw_album|
-          album = Album.new
-          album.title = raw_album['name']
-          album.remote_id = raw_album['id']
-          album.user = user
-          album.service = "facebook"
-          albums << album
-        end
-        albums
-      end
-
-      request
-    end
-
   end
 
   module Util
