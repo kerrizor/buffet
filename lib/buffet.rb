@@ -30,14 +30,14 @@ require 'rubygems'
 require 'typhoeus'
 require 'json'
 
-FACEBOOK_APP_ID = ""
-FACEBOOK_SECRET = ""
-FACEBOOK_USER_TOKEN = ""
+FACEBOOK_APP_ID = "132761686793915"
+FACEBOOK_SECRET = "90c473260d7badac6cb6b336e83ffc3a"
+FACEBOOK_USER_TOKEN = "132761686793915|2.CYokn1pkBg63J8qq_4HIow__.3600.1299297600-214500256|0cFJdsxlwRddRZMjTm7ZqXCprqg"
 
-FLICKR_TOKEN = ""
-FLICKR_SECRET = ""
-FLICKR_USER_TOKEN = ""
-FLICKR_USER_ID = ""
+FLICKR_TOKEN = "3637b1f30cfa0503eedf9aaca8a4c371"
+FLICKR_SECRET = "3571d29d7a1c068a"
+FLICKR_USER_TOKEN = "72157625167046266-909fd54999d6d095"
+FLICKR_USER_ID = "37944675@N00"
 
 class MyUser;
   def get_facebook_token
@@ -123,6 +123,7 @@ module Buffet
       requests = []
       options.delete(:services) { |s| [] }.each do |service| # Hash.delete returns the result of the block if it doesn't find the key
         requests << Buffet::Util::constantize("#{service.to_s.capitalize}Proxy").find_albums(hydra, user, options)
+        hydra.queue(request)
       end
       hydra.run
 
@@ -138,6 +139,7 @@ module Buffet
 
       hydra = Typhoeus::Hydra.new
       request = Buffet::Util::constantize("#{service.to_s.capitalize}Proxy").find_album_images(hydra, self)
+      hydra.queue(request)
       hydra.run
 
       request.handled_response
@@ -186,11 +188,11 @@ module Buffet
 #      #   raise 'needs to implement "find_album"'
 #      # end
 
-    def self.find_albums(hydra, user, options = {})
+    def self.find_albums(user, options = {})
       raise 'needs to implement "find_albums"'
     end
 
-    def self.find_album_images(hydra, album, options = {})
+    def self.find_album_images(album, options = {})
       raise 'needs to implement "find_album_images"'
     end
 
@@ -199,7 +201,7 @@ module Buffet
   # The individual service proxies implement the methods in the Proxy interface. This is where we make the actual API
   # call. These methods are responsible for parsing the JSON/XML response and returning pure types.
   #
-  # We may want to specify what types of media this se`rvice returns, so we don't have to hit photo services when we're
+  # We may want to specify what types of media this service returns, so we don't have to hit photo services when we're
   # interested in videos. Though, maybe we can do that by having a photo service return an empty result set for a
   # find_videos method.
   #
@@ -211,10 +213,9 @@ module Buffet
 
     API_BASE_URL = "http://api.flickr.com/services/"
     
-    def self.find_albums(hydra, user, options = {})
+    def self.find_albums(user, options = {})
       request_url = self.signed_url({"method" => "flickr.photosets.getList", "user_id" => user.get_flickr_id})
       request = Typhoeus::Request.new(request_url)
-      hydra.queue(request)
 
       request.on_complete = lambda do |response|
         parsed = Crack::XML.parse(response.body)
@@ -243,7 +244,7 @@ module Buffet
       request
     end
 
-    def self.find_album_images(hydra, album, options = {})
+    def self.find_album_images(album, options = {})
 
       # though a photostream acts like an album, it's accessed differently
       if (album.title == "Photostream")
@@ -253,7 +254,6 @@ module Buffet
       end
 
       request = Typhoeus::Request.new(request_url)
-      hydra.queue(request)
 
       request.on_complete = lambda do |response|
         parsed = Crack::XML.parse(response.body)
@@ -304,10 +304,9 @@ module Buffet
   require 'json'
   class FacebookProxy < ProxyInterface
 
-    def self.find_albums(hydra, user, options = {})
+    def self.find_albums(user, options = {})
       request_url = "https://graph.facebook.com/me/albums?client_id=#{FACEBOOK_APP_ID}&client_secret=#{FACEBOOK_SECRET}&access_token=#{CGI::escape user.get_facebook_token}"
       request = Typhoeus::Request.new(request_url)
-      hydra.queue(request)
 
       request.on_complete = lambda do |response|
         parsed = JSON.parse(response.body)
@@ -327,13 +326,12 @@ module Buffet
       request
     end
 
-    def self.find_album_images(hydra, album, options = {})
+    def self.find_album_images(album, options = {})
 
       request_url = "https://graph.facebook.com/#{album.remote_id}/photos?access_token=#{CGI::escape album.user.get_facebook_token}"
 
       request = Typhoeus::Request.new(request_url)
 
-      hydra.queue(request)
       request.on_complete = lambda do |response|
         parsed = JSON.parse(response.body)
 
